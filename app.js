@@ -1,8 +1,6 @@
 // Harborwalk Reporting — single-page app
-// Storage: localStorage. Weather: OpenMeteo (no key required).
-
-const LS_RECORDS = "hw.records.v1";
-const LS_SETTINGS = "hw.settings.v1";
+// Storage: REST API backed by a JSON file in a Docker volume.
+// Weather: OpenMeteo (no key required).
 
 const DEFAULT_SETTINGS = {
   label: "Destin Harborwalk",
@@ -11,41 +9,79 @@ const DEFAULT_SETTINGS = {
   tz: "America/Chicago",
 };
 
-// --------------------- storage ---------------------
+// --------------------- storage (API-backed, with in-memory cache) ---------------------
 
-function loadRecords() {
+let RECORDS = [];
+let SETTINGS = { ...DEFAULT_SETTINGS };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status} ${res.statusText}: ${text}`);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+async function bootstrap() {
   try {
-    return JSON.parse(localStorage.getItem(LS_RECORDS)) || [];
-  } catch {
-    return [];
+    [RECORDS, SETTINGS] = await Promise.all([api("/api/records"), api("/api/settings")]);
+  } catch (e) {
+    showBanner(`Could not reach the server: ${e.message}`);
   }
 }
 
-function saveRecords(rows) {
-  localStorage.setItem(LS_RECORDS, JSON.stringify(rows));
+function loadRecords() {
+  return RECORDS;
 }
 
-function upsertRecord(row) {
-  const rows = loadRecords().filter((r) => r.date !== row.date);
-  rows.push(row);
-  rows.sort((a, b) => a.date.localeCompare(b.date));
-  saveRecords(rows);
+async function upsertRecord(row) {
+  const saved = await api(`/api/records/${row.date}`, {
+    method: "PUT",
+    body: JSON.stringify(row),
+  });
+  RECORDS = RECORDS.filter((r) => r.date !== row.date);
+  RECORDS.push(saved);
+  RECORDS.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function deleteRecord(date) {
-  saveRecords(loadRecords().filter((r) => r.date !== date));
+async function deleteRecord(date) {
+  await api(`/api/records/${date}`, { method: "DELETE" });
+  RECORDS = RECORDS.filter((r) => r.date !== date);
+}
+
+async function wipeAllRecords() {
+  await api("/api/records", { method: "DELETE" });
+  RECORDS = [];
+}
+
+async function bulkImport(rows) {
+  await api("/api/records/bulk", { method: "POST", body: JSON.stringify(rows) });
+  RECORDS = await api("/api/records");
 }
 
 function loadSettings() {
-  try {
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(LS_SETTINGS)) || {}) };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+  return SETTINGS;
 }
 
-function saveSettings(s) {
-  localStorage.setItem(LS_SETTINGS, JSON.stringify(s));
+async function saveSettings(s) {
+  SETTINGS = await api("/api/settings", { method: "PUT", body: JSON.stringify(s) });
+}
+
+function showBanner(msg) {
+  let el = document.getElementById("conn-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "conn-banner";
+    el.style.cssText =
+      "background:#fef2f2;color:#991b1b;border-bottom:1px solid #fecaca;padding:10px 16px;font-size:13px;text-align:center;";
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.textContent = msg;
 }
 
 // --------------------- weather ---------------------
@@ -225,7 +261,7 @@ dateEl.addEventListener("change", () => {
   weatherDetail.textContent = "";
 });
 
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(form);
   const rec = {
@@ -249,14 +285,19 @@ form.addEventListener("submit", (e) => {
         }
       : null,
   };
-  upsertRecord(rec);
-  entryMsg.textContent = `Saved report for ${rec.date}.`;
-  entryMsg.className = "msg ok";
+  try {
+    await upsertRecord(rec);
+    entryMsg.textContent = `Saved report for ${rec.date}.`;
+    entryMsg.className = "msg ok";
+    form.reset();
+    dateEl.value = new Date().toISOString().slice(0, 10);
+    weatherDetail.textContent = "";
+    lastWeatherFetch = null;
+  } catch (err) {
+    entryMsg.textContent = `Save failed: ${err.message}`;
+    entryMsg.className = "msg err";
+  }
   setTimeout(() => (entryMsg.textContent = ""), 3000);
-  form.reset();
-  dateEl.value = new Date().toISOString().slice(0, 10);
-  weatherDetail.textContent = "";
-  lastWeatherFetch = null;
 });
 
 // --------------------- records view ---------------------
@@ -288,10 +329,14 @@ function renderRecords() {
     tbody.appendChild(tr);
   }
   tbody.querySelectorAll("button[data-del]").forEach((b) =>
-    b.addEventListener("click", () => {
+    b.addEventListener("click", async () => {
       if (confirm(`Delete record for ${b.dataset.del}?`)) {
-        deleteRecord(b.dataset.del);
-        renderRecords();
+        try {
+          await deleteRecord(b.dataset.del);
+          renderRecords();
+        } catch (err) {
+          alert(`Delete failed: ${err.message}`);
+        }
       }
     })
   );
@@ -381,9 +426,13 @@ document.getElementById("import-csv").addEventListener("change", async (e) => {
         },
       };
     });
-  for (const r of rows) upsertRecord(r);
-  renderRecords();
-  alert(`Imported ${rows.length} records.`);
+  try {
+    await bulkImport(rows);
+    renderRecords();
+    alert(`Imported ${rows.length} records.`);
+  } catch (err) {
+    alert(`Import failed: ${err.message}`);
+  }
   e.target.value = "";
 });
 
@@ -637,32 +686,41 @@ function renderSettings() {
   document.getElementById("s-tz").value = s.tz;
 }
 
-settingsForm.addEventListener("submit", (e) => {
+settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  saveSettings({
-    label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
-    lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
-    lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
-    tz: document.getElementById("s-tz").value || "auto",
-  });
   const msg = document.getElementById("settings-msg");
-  msg.textContent = "Saved.";
-  msg.className = "msg ok";
+  try {
+    await saveSettings({
+      label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
+      lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
+      lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
+      tz: document.getElementById("s-tz").value || "auto",
+    });
+    msg.textContent = "Saved.";
+    msg.className = "msg ok";
+  } catch (err) {
+    msg.textContent = `Save failed: ${err.message}`;
+    msg.className = "msg err";
+  }
   setTimeout(() => (msg.textContent = ""), 2000);
 });
 
-document.getElementById("wipe-data").addEventListener("click", () => {
-  if (confirm("Delete ALL records? This cannot be undone.")) {
-    localStorage.removeItem(LS_RECORDS);
+document.getElementById("wipe-data").addEventListener("click", async () => {
+  if (!confirm("Delete ALL records? This cannot be undone.")) return;
+  try {
+    await wipeAllRecords();
     renderRecords();
     renderMetrics();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
   }
 });
 
-document.getElementById("seed-demo").addEventListener("click", () => {
+document.getElementById("seed-demo").addEventListener("click", async () => {
   if (!confirm("Seed 60 days of demo data? Existing dates will be overwritten.")) return;
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
+  const rows = [];
   for (let i = 1; i <= 60; i++) {
     const d = addDays(today, -i);
     const date = isoDate(d);
@@ -671,7 +729,7 @@ document.getElementById("seed-demo").addEventListener("click", () => {
     const weather = Math.round((4 + Math.random() * 6) * 10) / 10;
     const wMul = 0.6 + (weather / 10) * 0.7;
     const dMul = isWeekend ? 1.4 : 1;
-    upsertRecord({
+    rows.push({
       date,
       weather,
       lunchRevenue: Math.round(2200 * wMul * dMul + Math.random() * 400),
@@ -683,10 +741,18 @@ document.getElementById("seed-demo").addEventListener("click", () => {
       weatherDetail: null,
     });
   }
-  renderRecords();
-  renderMetrics();
-  alert("Demo data seeded.");
+  try {
+    await bulkImport(rows);
+    renderRecords();
+    renderMetrics();
+    alert("Demo data seeded.");
+  } catch (err) {
+    alert(`Seed failed: ${err.message}`);
+  }
 });
 
-// initial render
-renderRecords();
+// initial bootstrap — fetch from server, then render
+(async () => {
+  await bootstrap();
+  renderRecords();
+})();
