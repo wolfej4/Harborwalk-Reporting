@@ -7,15 +7,50 @@ that compares any two periods.
 
 ## Run it
 
-It is a static site — no build step, no server, no API key.
+It is a static site — no build step, no API key.
+
+### Local
 
 ```sh
-# any static server works; e.g.
 python3 -m http.server 8000
-# then open http://localhost:8000
+# open http://localhost:8000
 ```
 
 Or just open `index.html` directly in a browser.
+
+### Docker
+
+```sh
+docker compose up -d --build
+# open http://<host>:8080
+```
+
+The image is `nginx:1.27-alpine` serving the three static files. Change the
+host port in `docker-compose.yml` if `8080` is taken.
+
+### Portainer
+
+Two options:
+
+**Stack from Git (recommended):**
+
+1. Portainer → **Stacks → Add stack → Repository**.
+2. Repository URL: `https://github.com/wolfej4/Harborwalk-Reporting`
+3. Reference: `refs/heads/main` (or whichever branch you've merged to).
+4. Compose path: `docker-compose.yml`.
+5. **Deploy the stack.** Portainer will `docker compose build` and start it.
+
+**Stack from web editor:**
+
+1. Portainer → **Stacks → Add stack → Web editor**.
+2. Paste the contents of `docker-compose.yml`.
+3. Because the editor build context can't reach the repo, switch the
+   `build: .` line to a prebuilt `image:` reference, or use the Repository
+   option above.
+
+Data lives entirely in the visitor's browser `localStorage`, so the container
+itself is stateless — no volumes needed. Use the **Records → Export CSV**
+button to back up.
 
 ## Data captured per day
 
