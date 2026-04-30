@@ -1,0 +1,388 @@
+:root {
+  --bg: #0f172a;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --accent: #0ea5e9;
+  --accent-ink: #ffffff;
+  --good: #16a34a;
+  --bad: #dc2626;
+  --warn: #d97706;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 16px rgba(15, 23, 42, 0.06);
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(180deg, #e0f2fe 0%, #f1f5f9 240px, #f1f5f9 100%);
+  color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  min-height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 28px;
+  background: linear-gradient(135deg, #0f172a, #0c4a6e);
+  color: white;
+  box-shadow: var(--shadow);
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.2px;
+}
+
+.brand .tag {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.tab {
+  background: transparent;
+  border: 0;
+  color: #cbd5e1;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: white;
+}
+
+.tab.active {
+  background: white;
+  color: var(--ink);
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.card h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid fieldset,
+.grid .actions,
+.grid .weather-cell {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 720px) {
+  .grid fieldset {
+    grid-column: span 1;
+  }
+  .grid .weather-cell {
+    grid-column: 1 / -1;
+  }
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+label > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="date"] {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel-2);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+}
+
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+  background: white;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+}
+
+fieldset legend {
+  padding: 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 0;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+button.primary:hover {
+  filter: brightness(1.05);
+}
+
+button.ghost {
+  background: white;
+  color: var(--ink);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+button.ghost:hover {
+  background: var(--panel-2);
+}
+
+button.danger {
+  background: white;
+  color: var(--bad);
+  border: 1px solid #fecaca;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+button.danger:hover {
+  background: #fef2f2;
+}
+
+button.link {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  padding: 0;
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.weather-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.weather-row input {
+  max-width: 160px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.msg {
+  font-size: 13px;
+}
+
+.msg.ok {
+  color: var(--good);
+}
+
+.msg.err {
+  color: var(--bad);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  padding: 9px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+
+th {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+tbody tr:hover {
+  background: #f8fafc;
+}
+
+.weather-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: white;
+}
+
+.delta-up {
+  color: var(--good);
+}
+
+.delta-down {
+  color: var(--bad);
+}
+
+.period-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.period h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.period label {
+  margin-bottom: 8px;
+}
+
+.presets {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+
+@media (max-width: 600px) {
+  .grid,
+  .period-grid,
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+  fieldset {
+    grid-template-columns: 1fr 1fr;
+  }
+  .topbar {
+    padding: 14px 16px;
+  }
+}

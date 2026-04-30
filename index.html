@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harborwalk Reporting</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Harborwalk Reporting</h1>
+        <span class="tag">Daily revenue, covers &amp; weather</span>
+      </div>
+      <nav class="tabs">
+        <button class="tab active" data-view="entry">Daily Entry</button>
+        <button class="tab" data-view="records">Records</button>
+        <button class="tab" data-view="metrics">Metrics</button>
+        <button class="tab" data-view="settings">Settings</button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- Daily entry -->
+      <section id="view-entry" class="view active">
+        <div class="card">
+          <h2>New Daily Report</h2>
+          <form id="entry-form" class="grid">
+            <label>
+              <span>Date</span>
+              <input type="date" name="date" id="f-date" required />
+            </label>
+
+            <label class="weather-cell">
+              <span>
+                Weather (1–10)
+                <button type="button" id="fetch-weather" class="ghost">Fetch from OpenMeteo</button>
+              </span>
+              <div class="weather-row">
+                <input type="number" name="weather" id="f-weather" min="1" max="10" step="0.1" required />
+                <span id="weather-detail" class="muted"></span>
+              </div>
+            </label>
+
+            <fieldset>
+              <legend>Lunch</legend>
+              <label>
+                <span>Revenue ($)</span>
+                <input type="number" name="lunchRevenue" id="f-lunch-rev" min="0" step="0.01" required />
+              </label>
+              <label>
+                <span>Covers</span>
+                <input type="number" name="lunchCovers" id="f-lunch-cov" min="0" step="1" required />
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Dinner</legend>
+              <label>
+                <span>Revenue ($)</span>
+                <input type="number" name="dinnerRevenue" id="f-dinner-rev" min="0" step="0.01" required />
+              </label>
+              <label>
+                <span>Covers</span>
+                <input type="number" name="dinnerCovers" id="f-dinner-cov" min="0" step="1" required />
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>Retail</legend>
+              <label>
+                <span>Revenue ($)</span>
+                <input type="number" name="retailRevenue" id="f-retail-rev" min="0" step="0.01" required />
+              </label>
+              <label>
+                <span>Transactions</span>
+                <input type="number" name="retailTxns" id="f-retail-txn" min="0" step="1" required />
+              </label>
+            </fieldset>
+
+            <div class="actions">
+              <button type="submit" class="primary">Save Report</button>
+              <button type="reset" class="ghost">Clear</button>
+              <span id="entry-msg" class="msg"></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Records -->
+      <section id="view-records" class="view">
+        <div class="card">
+          <div class="card-head">
+            <h2>Records</h2>
+            <div class="card-actions">
+              <button id="export-csv" class="ghost">Export CSV</button>
+              <button id="import-csv-btn" class="ghost">Import CSV</button>
+              <input type="file" id="import-csv" accept=".csv" hidden />
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table id="records-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Weather</th>
+                  <th>Lunch Rev</th>
+                  <th>Lunch Cov</th>
+                  <th>Dinner Rev</th>
+                  <th>Dinner Cov</th>
+                  <th>Retail Rev</th>
+                  <th>Retail Txn</th>
+                  <th>Total Rev</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Metrics -->
+      <section id="view-metrics" class="view">
+        <div class="card">
+          <h2>Compare Periods</h2>
+          <div class="period-grid">
+            <div class="period">
+              <h3>Period A</h3>
+              <label><span>From</span><input type="date" id="a-from" /></label>
+              <label><span>To</span><input type="date" id="a-to" /></label>
+            </div>
+            <div class="period">
+              <h3>Period B</h3>
+              <label><span>From</span><input type="date" id="b-from" /></label>
+              <label><span>To</span><input type="date" id="b-to" /></label>
+            </div>
+            <div class="presets">
+              <span>Quick presets:</span>
+              <button class="ghost" data-preset="last7">Last 7 vs prior 7</button>
+              <button class="ghost" data-preset="last30">Last 30 vs prior 30</button>
+              <button class="ghost" data-preset="mtd">MTD vs prior month MTD</button>
+              <button class="ghost" data-preset="ytd">YTD vs prior YTD</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Summary</h2>
+          <div class="table-wrap">
+            <table id="summary-table">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Period A</th>
+                  <th>Period B</th>
+                  <th>Δ</th>
+                  <th>Δ %</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Revenue by Day</h2>
+          <canvas id="chart-revenue" height="120"></canvas>
+        </div>
+
+        <div class="card">
+          <h2>Covers by Day</h2>
+          <canvas id="chart-covers" height="120"></canvas>
+        </div>
+
+        <div class="card">
+          <h2>Revenue vs Weather</h2>
+          <p class="muted">Each point is a day. X = weather rank, Y = total revenue.</p>
+          <canvas id="chart-weather" height="120"></canvas>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="view">
+        <div class="card">
+          <h2>Location</h2>
+          <p class="muted">
+            Used to fetch weather from OpenMeteo. Defaults to Boston, MA. Look up coordinates at
+            <a href="https://www.latlong.net/" target="_blank" rel="noopener">latlong.net</a>.
+          </p>
+          <form id="settings-form" class="grid two">
+            <label>
+              <span>Location label</span>
+              <input type="text" id="s-label" />
+            </label>
+            <label>
+              <span>Latitude</span>
+              <input type="number" step="0.0001" id="s-lat" />
+            </label>
+            <label>
+              <span>Longitude</span>
+              <input type="number" step="0.0001" id="s-lon" />
+            </label>
+            <label>
+              <span>Timezone</span>
+              <input type="text" id="s-tz" placeholder="auto" />
+            </label>
+            <div class="actions">
+              <button type="submit" class="primary">Save</button>
+              <span id="settings-msg" class="msg"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Data</h2>
+          <div class="card-actions">
+            <button id="seed-demo" class="ghost">Seed demo data</button>
+            <button id="wipe-data" class="danger">Delete all records</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
