@@ -5,10 +5,10 @@ const LS_RECORDS = "hw.records.v1";
 const LS_SETTINGS = "hw.settings.v1";
 
 const DEFAULT_SETTINGS = {
-  label: "Boston Harborwalk",
-  lat: 42.3601,
-  lon: -71.0589,
-  tz: "auto",
+  label: "Destin Harborwalk",
+  lat: 30.3935,
+  lon: -86.4958,
+  tz: "America/Chicago",
 };
 
 // --------------------- storage ---------------------
