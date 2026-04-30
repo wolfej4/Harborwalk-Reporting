@@ -22,11 +22,11 @@ Or just open `index.html` directly in a browser.
 
 ```sh
 docker compose up -d --build
-# open http://<host>:8080
+# open http://<host>:3000
 ```
 
 The image is `nginx:1.27-alpine` serving the three static files. Change the
-host port in `docker-compose.yml` if `8080` is taken.
+host port in `docker-compose.yml` if `3000` is taken.
 
 ### Portainer
 
