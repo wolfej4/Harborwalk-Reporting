@@ -1,8 +1,6 @@
 // Harborwalk Reporting — single-page app
-// Storage: localStorage. Weather: OpenMeteo (no key required).
-
-const LS_RECORDS = "hw.records.v1";
-const LS_SETTINGS = "hw.settings.v1";
+// Storage: REST API backed by a JSON file in a Docker volume.
+// Weather: OpenMeteo (no key required).
 
 const DEFAULT_SETTINGS = {
   label: "Destin Harborwalk",
@@ -11,67 +9,108 @@ const DEFAULT_SETTINGS = {
   tz: "America/Chicago",
 };
 
-// --------------------- storage ---------------------
+// --------------------- storage (API-backed, with in-memory cache) ---------------------
 
-function loadRecords() {
+let RECORDS = [];
+let SETTINGS = { ...DEFAULT_SETTINGS };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status} ${res.statusText}: ${text}`);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+async function bootstrap() {
   try {
-    return JSON.parse(localStorage.getItem(LS_RECORDS)) || [];
-  } catch {
-    return [];
+    [RECORDS, SETTINGS] = await Promise.all([api("/api/records"), api("/api/settings")]);
+  } catch (e) {
+    showBanner(`Could not reach the server: ${e.message}`);
   }
 }
 
-function saveRecords(rows) {
-  localStorage.setItem(LS_RECORDS, JSON.stringify(rows));
+function loadRecords() {
+  return RECORDS;
 }
 
-function upsertRecord(row) {
-  const rows = loadRecords().filter((r) => r.date !== row.date);
-  rows.push(row);
-  rows.sort((a, b) => a.date.localeCompare(b.date));
-  saveRecords(rows);
+async function upsertRecord(row) {
+  const saved = await api(`/api/records/${row.date}`, {
+    method: "PUT",
+    body: JSON.stringify(row),
+  });
+  RECORDS = RECORDS.filter((r) => r.date !== row.date);
+  RECORDS.push(saved);
+  RECORDS.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function deleteRecord(date) {
-  saveRecords(loadRecords().filter((r) => r.date !== date));
+async function deleteRecord(date) {
+  await api(`/api/records/${date}`, { method: "DELETE" });
+  RECORDS = RECORDS.filter((r) => r.date !== date);
+}
+
+async function wipeAllRecords() {
+  await api("/api/records", { method: "DELETE" });
+  RECORDS = [];
+}
+
+async function bulkImport(rows) {
+  await api("/api/records/bulk", { method: "POST", body: JSON.stringify(rows) });
+  RECORDS = await api("/api/records");
 }
 
 function loadSettings() {
-  try {
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(LS_SETTINGS)) || {}) };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+  return SETTINGS;
 }
 
-function saveSettings(s) {
-  localStorage.setItem(LS_SETTINGS, JSON.stringify(s));
+async function saveSettings(s) {
+  SETTINGS = await api("/api/settings", { method: "PUT", body: JSON.stringify(s) });
+}
+
+function showBanner(msg) {
+  let el = document.getElementById("conn-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "conn-banner";
+    el.style.cssText =
+      "background:#fef2f2;color:#991b1b;border-bottom:1px solid #fecaca;padding:10px 16px;font-size:13px;text-align:center;";
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.textContent = msg;
 }
 
 // --------------------- weather ---------------------
 
-// Score a day 1–10 using OpenMeteo daily fields.
+// Score a day 1–10 from full-day averages (the tool is run after close,
+// so the report should reflect what the day actually felt like, not just
+// the peak high or peak gust).
 // 10 = ideal restaurant/retail weather (warm, dry, calm, mostly sunny).
-function scoreWeather({ tMaxF, tMinF, precipIn, windMph, cloudPct }) {
+function scoreWeather({ tAvgF, precipIn, windAvgMph, cloudAvgPct }) {
   let score = 10;
-  const avg = (tMaxF + tMinF) / 2;
 
-  // Distance from a 75°F ideal — 10° off ≈ 1 point.
-  score -= Math.abs(avg - 75) * 0.1;
+  // Distance from a 75°F daily average — 10° off ≈ 1 point.
+  if (tAvgF != null) score -= Math.abs(tAvgF - 75) * 0.1;
 
   // Precipitation is a big revenue killer.
   if (precipIn > 0) score -= Math.min(5, precipIn * 5);
 
-  // Wind above 15 mph chips away at outdoor seating.
-  if (windMph > 15) score -= Math.min(3, (windMph - 15) * 0.2);
+  // Sustained wind above ~12 mph (avg, not gust) chips away at outdoor seating.
+  if (windAvgMph != null && windAvgMph > 12) {
+    score -= Math.min(3, (windAvgMph - 12) * 0.25);
+  }
 
   // Heavy overcast — small penalty.
-  if (cloudPct != null) score -= (cloudPct / 100) * 1.5;
+  if (cloudAvgPct != null) score -= (cloudAvgPct / 100) * 1.5;
 
-  // Temperature extremes.
-  if (tMaxF < 50) score -= 2;
-  if (tMaxF < 40) score -= 2;
-  if (tMaxF > 95) score -= 2;
+  // Daily-average temperature extremes.
+  if (tAvgF != null && tAvgF < 45) score -= 2;
+  if (tAvgF != null && tAvgF < 35) score -= 2;
+  if (tAvgF != null && tAvgF > 90) score -= 2;
 
   score = Math.max(1, Math.min(10, score));
   return Math.round(score * 10) / 10;
@@ -84,19 +123,21 @@ async function fetchWeather(dateStr, settings) {
     ? "https://archive-api.open-meteo.com/v1/archive"
     : "https://api.open-meteo.com/v1/forecast";
 
+  // Pull hourly so we can average across the day, plus daily for the
+  // high/low we still display alongside the average.
   const params = new URLSearchParams({
     latitude: String(settings.lat),
     longitude: String(settings.lon),
     start_date: dateStr,
     end_date: dateStr,
-    daily: [
-      "temperature_2m_max",
-      "temperature_2m_min",
-      "precipitation_sum",
-      "wind_speed_10m_max",
-      "cloud_cover_mean",
+    hourly: [
+      "temperature_2m",
+      "precipitation",
+      "wind_speed_10m",
+      "cloud_cover",
       "weather_code",
     ].join(","),
+    daily: ["temperature_2m_max", "temperature_2m_min"].join(","),
     temperature_unit: "fahrenheit",
     wind_speed_unit: "mph",
     precipitation_unit: "inch",
@@ -107,16 +148,33 @@ async function fetchWeather(dateStr, settings) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
   const data = await res.json();
+  const h = data.hourly;
   const d = data.daily;
-  if (!d || !d.time || !d.time.length) throw new Error("No weather data for that date");
+  if (!h || !h.time || !h.time.length) throw new Error("No weather data for that date");
+
+  const clean = (arr) => (arr || []).filter((v) => v != null);
+  const mean = (arr) => {
+    const v = clean(arr);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const sum = (arr) => clean(arr).reduce((a, b) => a + b, 0);
+  const dominant = (arr) => {
+    const counts = new Map();
+    for (const c of clean(arr)) counts.set(c, (counts.get(c) || 0) + 1);
+    let best = null;
+    let n = 0;
+    for (const [k, v] of counts) if (v > n) (best = k), (n = v);
+    return best;
+  };
 
   const out = {
-    tMaxF: d.temperature_2m_max?.[0],
-    tMinF: d.temperature_2m_min?.[0],
-    precipIn: d.precipitation_sum?.[0] ?? 0,
-    windMph: d.wind_speed_10m_max?.[0] ?? 0,
-    cloudPct: d.cloud_cover_mean?.[0] ?? null,
-    code: d.weather_code?.[0],
+    tAvgF: mean(h.temperature_2m),
+    tMaxF: d?.temperature_2m_max?.[0] ?? null,
+    tMinF: d?.temperature_2m_min?.[0] ?? null,
+    precipIn: sum(h.precipitation),
+    windAvgMph: mean(h.wind_speed_10m),
+    cloudAvgPct: mean(h.cloud_cover),
+    code: dominant(h.weather_code),
   };
   out.score = scoreWeather(out);
   out.summary = describeWeather(out);
@@ -149,10 +207,14 @@ const WMO = {
 
 function describeWeather(w) {
   const cond = WMO[w.code] || "—";
-  const hi = w.tMaxF != null ? `${Math.round(w.tMaxF)}°F` : "—";
-  const lo = w.tMinF != null ? `${Math.round(w.tMinF)}°F` : "—";
+  const avg = w.tAvgF != null ? `${Math.round(w.tAvgF)}°F avg` : "—";
+  const range =
+    w.tMaxF != null && w.tMinF != null
+      ? ` (${Math.round(w.tMinF)}–${Math.round(w.tMaxF)}°F)`
+      : "";
+  const wind = w.windAvgMph != null ? `, ${Math.round(w.windAvgMph)} mph wind` : "";
   const p = w.precipIn ? `, ${w.precipIn.toFixed(2)} in rain` : "";
-  return `${cond}, ${hi} / ${lo}${p}`;
+  return `${cond}, ${avg}${range}${wind}${p}`;
 }
 
 function weatherColor(score) {
@@ -225,7 +287,7 @@ dateEl.addEventListener("change", () => {
   weatherDetail.textContent = "";
 });
 
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(form);
   const rec = {
@@ -239,24 +301,30 @@ form.addEventListener("submit", (e) => {
     retailTxns: parseInt(fd.get("retailTxns")) || 0,
     weatherDetail: lastWeatherFetch
       ? {
+          tAvgF: lastWeatherFetch.tAvgF,
           tMaxF: lastWeatherFetch.tMaxF,
           tMinF: lastWeatherFetch.tMinF,
           precipIn: lastWeatherFetch.precipIn,
-          windMph: lastWeatherFetch.windMph,
-          cloudPct: lastWeatherFetch.cloudPct,
+          windAvgMph: lastWeatherFetch.windAvgMph,
+          cloudAvgPct: lastWeatherFetch.cloudAvgPct,
           code: lastWeatherFetch.code,
           summary: lastWeatherFetch.summary,
         }
       : null,
   };
-  upsertRecord(rec);
-  entryMsg.textContent = `Saved report for ${rec.date}.`;
-  entryMsg.className = "msg ok";
+  try {
+    await upsertRecord(rec);
+    entryMsg.textContent = `Saved report for ${rec.date}.`;
+    entryMsg.className = "msg ok";
+    form.reset();
+    dateEl.value = new Date().toISOString().slice(0, 10);
+    weatherDetail.textContent = "";
+    lastWeatherFetch = null;
+  } catch (err) {
+    entryMsg.textContent = `Save failed: ${err.message}`;
+    entryMsg.className = "msg err";
+  }
   setTimeout(() => (entryMsg.textContent = ""), 3000);
-  form.reset();
-  dateEl.value = new Date().toISOString().slice(0, 10);
-  weatherDetail.textContent = "";
-  lastWeatherFetch = null;
 });
 
 // --------------------- records view ---------------------
@@ -288,10 +356,14 @@ function renderRecords() {
     tbody.appendChild(tr);
   }
   tbody.querySelectorAll("button[data-del]").forEach((b) =>
-    b.addEventListener("click", () => {
+    b.addEventListener("click", async () => {
       if (confirm(`Delete record for ${b.dataset.del}?`)) {
-        deleteRecord(b.dataset.del);
-        renderRecords();
+        try {
+          await deleteRecord(b.dataset.del);
+          renderRecords();
+        } catch (err) {
+          alert(`Delete failed: ${err.message}`);
+        }
       }
     })
   );
@@ -308,11 +380,12 @@ document.getElementById("export-csv").addEventListener("click", () => {
     "dinnerCovers",
     "retailRevenue",
     "retailTxns",
+    "tAvgF",
     "tMaxF",
     "tMinF",
     "precipIn",
-    "windMph",
-    "cloudPct",
+    "windAvgMph",
+    "cloudAvgPct",
     "weatherCode",
   ];
   const lines = [header.join(",")];
@@ -328,11 +401,12 @@ document.getElementById("export-csv").addEventListener("click", () => {
         r.dinnerCovers,
         r.retailRevenue,
         r.retailTxns,
+        w.tAvgF ?? "",
         w.tMaxF ?? "",
         w.tMinF ?? "",
         w.precipIn ?? "",
-        w.windMph ?? "",
-        w.cloudPct ?? "",
+        w.windAvgMph ?? w.windMph ?? "",
+        w.cloudAvgPct ?? w.cloudPct ?? "",
         w.code ?? "",
       ].join(",")
     );
@@ -372,18 +446,24 @@ document.getElementById("import-csv").addEventListener("change", async (e) => {
         retailRevenue: parseFloat(obj.retailRevenue) || 0,
         retailTxns: parseInt(obj.retailTxns) || 0,
         weatherDetail: {
+          tAvgF: parseFloat(obj.tAvgF) || null,
           tMaxF: parseFloat(obj.tMaxF) || null,
           tMinF: parseFloat(obj.tMinF) || null,
           precipIn: parseFloat(obj.precipIn) || 0,
-          windMph: parseFloat(obj.windMph) || 0,
-          cloudPct: parseFloat(obj.cloudPct) || null,
+          // Accept new (avg) and legacy (max) column names on import.
+          windAvgMph: parseFloat(obj.windAvgMph ?? obj.windMph) || 0,
+          cloudAvgPct: parseFloat(obj.cloudAvgPct ?? obj.cloudPct) || null,
           code: parseInt(obj.weatherCode) || null,
         },
       };
     });
-  for (const r of rows) upsertRecord(r);
-  renderRecords();
-  alert(`Imported ${rows.length} records.`);
+  try {
+    await bulkImport(rows);
+    renderRecords();
+    alert(`Imported ${rows.length} records.`);
+  } catch (err) {
+    alert(`Import failed: ${err.message}`);
+  }
   e.target.value = "";
 });
 
@@ -637,32 +717,41 @@ function renderSettings() {
   document.getElementById("s-tz").value = s.tz;
 }
 
-settingsForm.addEventListener("submit", (e) => {
+settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  saveSettings({
-    label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
-    lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
-    lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
-    tz: document.getElementById("s-tz").value || "auto",
-  });
   const msg = document.getElementById("settings-msg");
-  msg.textContent = "Saved.";
-  msg.className = "msg ok";
+  try {
+    await saveSettings({
+      label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
+      lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
+      lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
+      tz: document.getElementById("s-tz").value || "auto",
+    });
+    msg.textContent = "Saved.";
+    msg.className = "msg ok";
+  } catch (err) {
+    msg.textContent = `Save failed: ${err.message}`;
+    msg.className = "msg err";
+  }
   setTimeout(() => (msg.textContent = ""), 2000);
 });
 
-document.getElementById("wipe-data").addEventListener("click", () => {
-  if (confirm("Delete ALL records? This cannot be undone.")) {
-    localStorage.removeItem(LS_RECORDS);
+document.getElementById("wipe-data").addEventListener("click", async () => {
+  if (!confirm("Delete ALL records? This cannot be undone.")) return;
+  try {
+    await wipeAllRecords();
     renderRecords();
     renderMetrics();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
   }
 });
 
-document.getElementById("seed-demo").addEventListener("click", () => {
+document.getElementById("seed-demo").addEventListener("click", async () => {
   if (!confirm("Seed 60 days of demo data? Existing dates will be overwritten.")) return;
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
+  const rows = [];
   for (let i = 1; i <= 60; i++) {
     const d = addDays(today, -i);
     const date = isoDate(d);
@@ -671,7 +760,7 @@ document.getElementById("seed-demo").addEventListener("click", () => {
     const weather = Math.round((4 + Math.random() * 6) * 10) / 10;
     const wMul = 0.6 + (weather / 10) * 0.7;
     const dMul = isWeekend ? 1.4 : 1;
-    upsertRecord({
+    rows.push({
       date,
       weather,
       lunchRevenue: Math.round(2200 * wMul * dMul + Math.random() * 400),
@@ -683,10 +772,18 @@ document.getElementById("seed-demo").addEventListener("click", () => {
       weatherDetail: null,
     });
   }
-  renderRecords();
-  renderMetrics();
-  alert("Demo data seeded.");
+  try {
+    await bulkImport(rows);
+    renderRecords();
+    renderMetrics();
+    alert("Demo data seeded.");
+  } catch (err) {
+    alert(`Seed failed: ${err.message}`);
+  }
 });
 
-// initial render
-renderRecords();
+// initial bootstrap — fetch from server, then render
+(async () => {
+  await bootstrap();
+  renderRecords();
+})();
