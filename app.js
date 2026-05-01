@@ -86,28 +86,31 @@ function showBanner(msg) {
 
 // --------------------- weather ---------------------
 
-// Score a day 1–10 using OpenMeteo daily fields.
+// Score a day 1–10 from full-day averages (the tool is run after close,
+// so the report should reflect what the day actually felt like, not just
+// the peak high or peak gust).
 // 10 = ideal restaurant/retail weather (warm, dry, calm, mostly sunny).
-function scoreWeather({ tMaxF, tMinF, precipIn, windMph, cloudPct }) {
+function scoreWeather({ tAvgF, precipIn, windAvgMph, cloudAvgPct }) {
   let score = 10;
-  const avg = (tMaxF + tMinF) / 2;
 
-  // Distance from a 75°F ideal — 10° off ≈ 1 point.
-  score -= Math.abs(avg - 75) * 0.1;
+  // Distance from a 75°F daily average — 10° off ≈ 1 point.
+  if (tAvgF != null) score -= Math.abs(tAvgF - 75) * 0.1;
 
   // Precipitation is a big revenue killer.
   if (precipIn > 0) score -= Math.min(5, precipIn * 5);
 
-  // Wind above 15 mph chips away at outdoor seating.
-  if (windMph > 15) score -= Math.min(3, (windMph - 15) * 0.2);
+  // Sustained wind above ~12 mph (avg, not gust) chips away at outdoor seating.
+  if (windAvgMph != null && windAvgMph > 12) {
+    score -= Math.min(3, (windAvgMph - 12) * 0.25);
+  }
 
   // Heavy overcast — small penalty.
-  if (cloudPct != null) score -= (cloudPct / 100) * 1.5;
+  if (cloudAvgPct != null) score -= (cloudAvgPct / 100) * 1.5;
 
-  // Temperature extremes.
-  if (tMaxF < 50) score -= 2;
-  if (tMaxF < 40) score -= 2;
-  if (tMaxF > 95) score -= 2;
+  // Daily-average temperature extremes.
+  if (tAvgF != null && tAvgF < 45) score -= 2;
+  if (tAvgF != null && tAvgF < 35) score -= 2;
+  if (tAvgF != null && tAvgF > 90) score -= 2;
 
   score = Math.max(1, Math.min(10, score));
   return Math.round(score * 10) / 10;
@@ -120,19 +123,21 @@ async function fetchWeather(dateStr, settings) {
     ? "https://archive-api.open-meteo.com/v1/archive"
     : "https://api.open-meteo.com/v1/forecast";
 
+  // Pull hourly so we can average across the day, plus daily for the
+  // high/low we still display alongside the average.
   const params = new URLSearchParams({
     latitude: String(settings.lat),
     longitude: String(settings.lon),
     start_date: dateStr,
     end_date: dateStr,
-    daily: [
-      "temperature_2m_max",
-      "temperature_2m_min",
-      "precipitation_sum",
-      "wind_speed_10m_max",
-      "cloud_cover_mean",
+    hourly: [
+      "temperature_2m",
+      "precipitation",
+      "wind_speed_10m",
+      "cloud_cover",
       "weather_code",
     ].join(","),
+    daily: ["temperature_2m_max", "temperature_2m_min"].join(","),
     temperature_unit: "fahrenheit",
     wind_speed_unit: "mph",
     precipitation_unit: "inch",
@@ -143,16 +148,33 @@ async function fetchWeather(dateStr, settings) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
   const data = await res.json();
+  const h = data.hourly;
   const d = data.daily;
-  if (!d || !d.time || !d.time.length) throw new Error("No weather data for that date");
+  if (!h || !h.time || !h.time.length) throw new Error("No weather data for that date");
+
+  const clean = (arr) => (arr || []).filter((v) => v != null);
+  const mean = (arr) => {
+    const v = clean(arr);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const sum = (arr) => clean(arr).reduce((a, b) => a + b, 0);
+  const dominant = (arr) => {
+    const counts = new Map();
+    for (const c of clean(arr)) counts.set(c, (counts.get(c) || 0) + 1);
+    let best = null;
+    let n = 0;
+    for (const [k, v] of counts) if (v > n) (best = k), (n = v);
+    return best;
+  };
 
   const out = {
-    tMaxF: d.temperature_2m_max?.[0],
-    tMinF: d.temperature_2m_min?.[0],
-    precipIn: d.precipitation_sum?.[0] ?? 0,
-    windMph: d.wind_speed_10m_max?.[0] ?? 0,
-    cloudPct: d.cloud_cover_mean?.[0] ?? null,
-    code: d.weather_code?.[0],
+    tAvgF: mean(h.temperature_2m),
+    tMaxF: d?.temperature_2m_max?.[0] ?? null,
+    tMinF: d?.temperature_2m_min?.[0] ?? null,
+    precipIn: sum(h.precipitation),
+    windAvgMph: mean(h.wind_speed_10m),
+    cloudAvgPct: mean(h.cloud_cover),
+    code: dominant(h.weather_code),
   };
   out.score = scoreWeather(out);
   out.summary = describeWeather(out);
@@ -185,10 +207,14 @@ const WMO = {
 
 function describeWeather(w) {
   const cond = WMO[w.code] || "—";
-  const hi = w.tMaxF != null ? `${Math.round(w.tMaxF)}°F` : "—";
-  const lo = w.tMinF != null ? `${Math.round(w.tMinF)}°F` : "—";
+  const avg = w.tAvgF != null ? `${Math.round(w.tAvgF)}°F avg` : "—";
+  const range =
+    w.tMaxF != null && w.tMinF != null
+      ? ` (${Math.round(w.tMinF)}–${Math.round(w.tMaxF)}°F)`
+      : "";
+  const wind = w.windAvgMph != null ? `, ${Math.round(w.windAvgMph)} mph wind` : "";
   const p = w.precipIn ? `, ${w.precipIn.toFixed(2)} in rain` : "";
-  return `${cond}, ${hi} / ${lo}${p}`;
+  return `${cond}, ${avg}${range}${wind}${p}`;
 }
 
 function weatherColor(score) {
@@ -275,11 +301,12 @@ form.addEventListener("submit", async (e) => {
     retailTxns: parseInt(fd.get("retailTxns")) || 0,
     weatherDetail: lastWeatherFetch
       ? {
+          tAvgF: lastWeatherFetch.tAvgF,
           tMaxF: lastWeatherFetch.tMaxF,
           tMinF: lastWeatherFetch.tMinF,
           precipIn: lastWeatherFetch.precipIn,
-          windMph: lastWeatherFetch.windMph,
-          cloudPct: lastWeatherFetch.cloudPct,
+          windAvgMph: lastWeatherFetch.windAvgMph,
+          cloudAvgPct: lastWeatherFetch.cloudAvgPct,
           code: lastWeatherFetch.code,
           summary: lastWeatherFetch.summary,
         }
@@ -353,11 +380,12 @@ document.getElementById("export-csv").addEventListener("click", () => {
     "dinnerCovers",
     "retailRevenue",
     "retailTxns",
+    "tAvgF",
     "tMaxF",
     "tMinF",
     "precipIn",
-    "windMph",
-    "cloudPct",
+    "windAvgMph",
+    "cloudAvgPct",
     "weatherCode",
   ];
   const lines = [header.join(",")];
@@ -373,11 +401,12 @@ document.getElementById("export-csv").addEventListener("click", () => {
         r.dinnerCovers,
         r.retailRevenue,
         r.retailTxns,
+        w.tAvgF ?? "",
         w.tMaxF ?? "",
         w.tMinF ?? "",
         w.precipIn ?? "",
-        w.windMph ?? "",
-        w.cloudPct ?? "",
+        w.windAvgMph ?? w.windMph ?? "",
+        w.cloudAvgPct ?? w.cloudPct ?? "",
         w.code ?? "",
       ].join(",")
     );
@@ -417,11 +446,13 @@ document.getElementById("import-csv").addEventListener("change", async (e) => {
         retailRevenue: parseFloat(obj.retailRevenue) || 0,
         retailTxns: parseInt(obj.retailTxns) || 0,
         weatherDetail: {
+          tAvgF: parseFloat(obj.tAvgF) || null,
           tMaxF: parseFloat(obj.tMaxF) || null,
           tMinF: parseFloat(obj.tMinF) || null,
           precipIn: parseFloat(obj.precipIn) || 0,
-          windMph: parseFloat(obj.windMph) || 0,
-          cloudPct: parseFloat(obj.cloudPct) || null,
+          // Accept new (avg) and legacy (max) column names on import.
+          windAvgMph: parseFloat(obj.windAvgMph ?? obj.windMph) || 0,
+          cloudAvgPct: parseFloat(obj.cloudAvgPct ?? obj.cloudPct) || null,
           code: parseInt(obj.weatherCode) || null,
         },
       };

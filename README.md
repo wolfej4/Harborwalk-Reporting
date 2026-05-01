@@ -89,11 +89,22 @@ All endpoints return JSON.
 
 ## Weather ranking
 
-The **Fetch from OpenMeteo** button calls the daily archive (past dates) or
-forecast (today / future) endpoint and computes a 1–10 score weighted toward
-revenue-relevant factors: temperature distance from a 75 °F ideal,
-precipitation, wind, cloud cover, and extreme-temperature penalties. The score
-is editable — operators can tweak it after fetch.
+The tool is meant to be filled in after close, so the score reflects the day
+that just happened, averaged across all 24 hours rather than peaks. **Fetch
+from OpenMeteo** pulls hourly observations (archive endpoint for past days,
+forecast endpoint for today) and averages temperature, wind, and cloud cover
+across the day, sums precipitation, and picks the most-frequent WMO weather
+code as the dominant condition. From those it computes a 1–10 score weighted
+toward revenue-relevant factors:
+
+- Temperature distance from a 75 °F daily average
+- Total daily precipitation
+- Average sustained wind (penalty above ~12 mph)
+- Average cloud cover
+- Extreme-temperature penalties for very cold or very hot days
+
+The score is editable — operators can tweak it after fetch. The day's high
+and low are still stored alongside the averages for reference.
 
 Default location is Destin Harborwalk, FL (30.3935, -86.4958, `America/Chicago`).
 Change it on the **Settings** tab.
