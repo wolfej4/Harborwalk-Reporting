@@ -9,6 +9,28 @@ const DEFAULT_SETTINGS = {
   tz: "America/Chicago",
 };
 
+// "Today" in the configured timezone, formatted YYYY-MM-DD. Using en-CA gives
+// us ISO-style output without parsing localized strings. Falls back to UTC if
+// the runtime can't honor the timezone.
+function todayInTz(tz) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+// YYYY-MM-DD → Date at UTC midnight on that day. Used as a label-only Date for
+// arithmetic; we never compare across time zones.
+function parseDateUTC(s) {
+  return new Date(`${s}T00:00:00Z`);
+}
+
 // --------------------- storage (API-backed, with in-memory cache) ---------------------
 
 let RECORDS = [];
@@ -117,7 +139,7 @@ function scoreWeather({ tAvgF, precipIn, windAvgMph, cloudAvgPct }) {
 }
 
 async function fetchWeather(dateStr, settings) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInTz(settings.tz);
   const isPast = dateStr < today;
   const base = isPast
     ? "https://archive-api.open-meteo.com/v1/archive"
@@ -260,7 +282,7 @@ const weatherEl = document.getElementById("f-weather");
 const weatherDetail = document.getElementById("weather-detail");
 const entryMsg = document.getElementById("entry-msg");
 
-dateEl.value = new Date().toISOString().slice(0, 10);
+dateEl.value = todayInTz(SETTINGS.tz);
 
 let lastWeatherFetch = null; // keep raw weather to attach to record
 
@@ -317,7 +339,7 @@ form.addEventListener("submit", async (e) => {
     entryMsg.textContent = `Saved report for ${rec.date}.`;
     entryMsg.className = "msg ok";
     form.reset();
-    dateEl.value = new Date().toISOString().slice(0, 10);
+    dateEl.value = todayInTz(SETTINGS.tz);
     weatherDetail.textContent = "";
     lastWeatherFetch = null;
   } catch (err) {
@@ -491,8 +513,9 @@ function addDays(d, n) {
 }
 
 function applyPreset(p) {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // "Today" is the calendar date in the configured timezone (e.g. Chicago),
+  // anchored to UTC midnight so the rest of the math is plain integer days.
+  const today = parseDateUTC(todayInTz(SETTINGS.tz));
   const yesterday = addDays(today, -1);
 
   if (p === "last7") {
@@ -749,8 +772,7 @@ document.getElementById("wipe-data").addEventListener("click", async () => {
 
 document.getElementById("seed-demo").addEventListener("click", async () => {
   if (!confirm("Seed 60 days of demo data? Existing dates will be overwritten.")) return;
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const today = parseDateUTC(todayInTz(SETTINGS.tz));
   const rows = [];
   for (let i = 1; i <= 60; i++) {
     const d = addDays(today, -i);
@@ -785,5 +807,7 @@ document.getElementById("seed-demo").addEventListener("click", async () => {
 // initial bootstrap — fetch from server, then render
 (async () => {
   await bootstrap();
+  // Reset the date input now that we've loaded the user's saved timezone.
+  dateEl.value = todayInTz(SETTINGS.tz);
   renderRecords();
 })();
