@@ -297,6 +297,59 @@ const entryMsg = document.getElementById("entry-msg");
 dateEl.value = todayInTz(SETTINGS.tz);
 
 let lastWeatherFetch = null; // keep raw weather to attach to record
+let editingOriginal = null; // when set, the form is editing this record
+
+const editBanner = document.getElementById("edit-banner");
+const editDateLabel = document.getElementById("edit-date-label");
+const entrySubmit = document.getElementById("entry-submit");
+const entryHeading = document.getElementById("entry-heading");
+
+function enterEditMode(rec) {
+  editingOriginal = rec;
+  document.getElementById("f-date").value = rec.date;
+  document.getElementById("f-date").readOnly = true;
+  document.getElementById("f-weather").value = rec.weather ?? "";
+  document.getElementById("f-lunch-rev").value = rec.lunchRevenue ?? "";
+  document.getElementById("f-lunch-cov").value = rec.lunchCovers ?? "";
+  document.getElementById("f-dinner-rev").value = rec.dinnerRevenue ?? "";
+  document.getElementById("f-dinner-cov").value = rec.dinnerCovers ?? "";
+  document.getElementById("f-retail-rev").value = rec.retailRevenue ?? "";
+  document.getElementById("f-retail-txn").value = rec.retailTxns ?? "";
+  weatherDetail.textContent = rec.weatherDetail?.summary || "";
+  lastWeatherFetch = null; // re-fetch only if user clicks the button
+  editDateLabel.textContent = rec.date;
+  editBanner.hidden = false;
+  entrySubmit.textContent = "Save Changes";
+  entryHeading.textContent = "Edit Daily Report";
+  entryMsg.textContent = "";
+  // Switch to the entry view
+  document.querySelector('.tab[data-view="entry"]').click();
+  document.getElementById("f-weather").focus();
+}
+
+function exitEditMode({ keepValues = false } = {}) {
+  editingOriginal = null;
+  editBanner.hidden = true;
+  entrySubmit.textContent = "Save Report";
+  entryHeading.textContent = "New Daily Report";
+  document.getElementById("f-date").readOnly = false;
+  if (!keepValues) {
+    form.reset();
+    dateEl.value = todayInTz(SETTINGS.tz);
+    weatherDetail.textContent = "";
+    lastWeatherFetch = null;
+  }
+}
+
+document.getElementById("cancel-edit").addEventListener("click", () => exitEditMode());
+
+form.addEventListener("reset", () => {
+  // Run after the native reset clears fields.
+  setTimeout(() => {
+    if (editingOriginal) exitEditMode();
+    else dateEl.value = todayInTz(SETTINGS.tz);
+  }, 0);
+});
 
 document.getElementById("fetch-weather").addEventListener("click", async () => {
   const date = dateEl.value;
@@ -324,8 +377,11 @@ dateEl.addEventListener("change", () => {
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(form);
+  // readonly inputs aren't disabled, but FormData on a date input still
+  // returns its value; in edit mode we lock the field so this matches the
+  // original anyway.
   const rec = {
-    date: fd.get("date"),
+    date: editingOriginal ? editingOriginal.date : fd.get("date"),
     weather: parseFloat(fd.get("weather")),
     lunchRevenue: parseFloat(fd.get("lunchRevenue")) || 0,
     lunchCovers: parseInt(fd.get("lunchCovers")) || 0,
@@ -344,16 +400,16 @@ form.addEventListener("submit", async (e) => {
           code: lastWeatherFetch.code,
           summary: lastWeatherFetch.summary,
         }
-      : null,
+      : editingOriginal?.weatherDetail || null,
   };
+  const wasEditing = !!editingOriginal;
   try {
     await upsertRecord(rec);
-    entryMsg.textContent = `Saved report for ${rec.date}.`;
+    entryMsg.textContent = wasEditing
+      ? `Updated report for ${rec.date}.`
+      : `Saved report for ${rec.date}.`;
     entryMsg.className = "msg ok";
-    form.reset();
-    dateEl.value = todayInTz(SETTINGS.tz);
-    weatherDetail.textContent = "";
-    lastWeatherFetch = null;
+    exitEditMode();
   } catch (err) {
     entryMsg.textContent = `Save failed: ${err.message}`;
     entryMsg.className = "msg err";
@@ -385,15 +441,27 @@ function renderRecords() {
       <td>${fmtMoney(r.retailRevenue)}</td>
       <td>${fmtNum(r.retailTxns)}</td>
       <td><strong>${fmtMoney(totalRev(r))}</strong></td>
-      <td><button class="link" data-del="${r.date}">Delete</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="link" data-edit="${r.date}">Edit</button>
+          <button class="link" data-del="${r.date}">Delete</button>
+        </div>
+      </td>
     `;
     tbody.appendChild(tr);
   }
+  tbody.querySelectorAll("button[data-edit]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const rec = RECORDS.find((r) => r.date === b.dataset.edit);
+      if (rec) enterEditMode(rec);
+    })
+  );
   tbody.querySelectorAll("button[data-del]").forEach((b) =>
     b.addEventListener("click", async () => {
       if (confirm(`Delete record for ${b.dataset.del}?`)) {
         try {
           await deleteRecord(b.dataset.del);
+          if (editingOriginal && editingOriginal.date === b.dataset.del) exitEditMode();
           renderRecords();
         } catch (err) {
           alert(`Delete failed: ${err.message}`);

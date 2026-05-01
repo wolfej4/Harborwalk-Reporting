@@ -25,7 +25,11 @@
       <!-- Daily entry -->
       <section id="view-entry" class="view active">
         <div class="card">
-          <h2>New Daily Report</h2>
+          <h2 id="entry-heading">New Daily Report</h2>
+          <div id="edit-banner" class="banner" hidden>
+            Editing the report for <strong id="edit-date-label"></strong>.
+            <button type="button" class="link" id="cancel-edit">Cancel</button>
+          </div>
           <form id="entry-form" class="grid">
             <label>
               <span>Date</span>
@@ -80,7 +84,7 @@
             </fieldset>
 
             <div class="actions">
-              <button type="submit" class="primary">Save Report</button>
+              <button type="submit" id="entry-submit" class="primary">Save Report</button>
               <button type="reset" class="ghost">Clear</button>
               <span id="entry-msg" class="msg"></span>
             </div>
