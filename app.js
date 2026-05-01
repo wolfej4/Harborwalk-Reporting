@@ -9,6 +9,32 @@ const DEFAULT_SETTINGS = {
   tz: "America/Chicago",
 };
 
+// "Today" in the configured timezone, formatted YYYY-MM-DD. Treats "auto",
+// empty, or invalid IANA names as the browser's local timezone — never UTC,
+// since picking UTC would re-introduce the after-close-shows-tomorrow bug.
+function todayInTz(tz) {
+  const wanted = tz && tz !== "auto" ? tz : undefined;
+  const tryFormat = (timeZone) => {
+    const opts = { year: "numeric", month: "2-digit", day: "2-digit" };
+    if (timeZone) opts.timeZone = timeZone;
+    const parts = new Intl.DateTimeFormat("en-CA", opts).formatToParts(new Date());
+    const get = (t) => parts.find((p) => p.type === t)?.value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  };
+  try {
+    return tryFormat(wanted);
+  } catch {
+    // Fall back to the browser's local zone — Intl with no timeZone uses it.
+    return tryFormat(undefined);
+  }
+}
+
+// YYYY-MM-DD → Date at UTC midnight on that day. Used as a label-only Date for
+// arithmetic; we never compare across time zones.
+function parseDateUTC(s) {
+  return new Date(`${s}T00:00:00Z`);
+}
+
 // --------------------- storage (API-backed, with in-memory cache) ---------------------
 
 let RECORDS = [];
@@ -30,6 +56,14 @@ async function api(path, opts = {}) {
 async function bootstrap() {
   try {
     [RECORDS, SETTINGS] = await Promise.all([api("/api/records"), api("/api/settings")]);
+    // Self-heal a legacy tz of "auto" (which Intl can't honor and would
+    // silently fall back to UTC, flipping "today" forward after close).
+    if (!SETTINGS.tz || SETTINGS.tz === "auto") {
+      SETTINGS = await api("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...SETTINGS, tz: DEFAULT_SETTINGS.tz }),
+      });
+    }
   } catch (e) {
     showBanner(`Could not reach the server: ${e.message}`);
   }
@@ -117,7 +151,7 @@ function scoreWeather({ tAvgF, precipIn, windAvgMph, cloudAvgPct }) {
 }
 
 async function fetchWeather(dateStr, settings) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInTz(settings.tz);
   const isPast = dateStr < today;
   const base = isPast
     ? "https://archive-api.open-meteo.com/v1/archive"
@@ -260,7 +294,7 @@ const weatherEl = document.getElementById("f-weather");
 const weatherDetail = document.getElementById("weather-detail");
 const entryMsg = document.getElementById("entry-msg");
 
-dateEl.value = new Date().toISOString().slice(0, 10);
+dateEl.value = todayInTz(SETTINGS.tz);
 
 let lastWeatherFetch = null; // keep raw weather to attach to record
 
@@ -317,7 +351,7 @@ form.addEventListener("submit", async (e) => {
     entryMsg.textContent = `Saved report for ${rec.date}.`;
     entryMsg.className = "msg ok";
     form.reset();
-    dateEl.value = new Date().toISOString().slice(0, 10);
+    dateEl.value = todayInTz(SETTINGS.tz);
     weatherDetail.textContent = "";
     lastWeatherFetch = null;
   } catch (err) {
@@ -491,8 +525,9 @@ function addDays(d, n) {
 }
 
 function applyPreset(p) {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // "Today" is the calendar date in the configured timezone (e.g. Chicago),
+  // anchored to UTC midnight so the rest of the math is plain integer days.
+  const today = parseDateUTC(todayInTz(SETTINGS.tz));
   const yesterday = addDays(today, -1);
 
   if (p === "last7") {
@@ -725,7 +760,7 @@ settingsForm.addEventListener("submit", async (e) => {
       label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
       lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
       lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
-      tz: document.getElementById("s-tz").value || "auto",
+      tz: document.getElementById("s-tz").value.trim() || DEFAULT_SETTINGS.tz,
     });
     msg.textContent = "Saved.";
     msg.className = "msg ok";
@@ -749,8 +784,7 @@ document.getElementById("wipe-data").addEventListener("click", async () => {
 
 document.getElementById("seed-demo").addEventListener("click", async () => {
   if (!confirm("Seed 60 days of demo data? Existing dates will be overwritten.")) return;
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const today = parseDateUTC(todayInTz(SETTINGS.tz));
   const rows = [];
   for (let i = 1; i <= 60; i++) {
     const d = addDays(today, -i);
@@ -785,5 +819,7 @@ document.getElementById("seed-demo").addEventListener("click", async () => {
 // initial bootstrap — fetch from server, then render
 (async () => {
   await bootstrap();
+  // Reset the date input now that we've loaded the user's saved timezone.
+  dateEl.value = todayInTz(SETTINGS.tz);
   renderRecords();
 })();
