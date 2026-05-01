@@ -458,47 +458,351 @@ document.getElementById("import-csv-btn").addEventListener("click", () => {
   document.getElementById("import-csv").click();
 });
 
+// --------------------- CSV import (verify-then-import flow) ---------------------
+
+// Targets the import can map columns onto. `aliases` are matched case-insensitively
+// against the header text after stripping non-alphanumerics for fuzzy auto-mapping.
+const IMPORT_TARGETS = [
+  { key: "date",          label: "Date (YYYY-MM-DD or MM/DD/YYYY)", required: true,
+    aliases: ["date", "day", "reportdate", "reportingdate", "businessdate"] },
+  { key: "weather",       label: "Weather rank (1-10)",
+    aliases: ["weather", "weatherrank", "rank", "weatherscore", "score"] },
+  { key: "lunchRevenue",  label: "Lunch revenue",
+    aliases: ["lunchrevenue", "lunchrev", "lunchsales", "lunch"] },
+  { key: "lunchCovers",   label: "Lunch covers",
+    aliases: ["lunchcovers", "lunchcov", "lunchguests"] },
+  { key: "dinnerRevenue", label: "Dinner revenue",
+    aliases: ["dinnerrevenue", "dinnerrev", "dinnersales", "dinner"] },
+  { key: "dinnerCovers",  label: "Dinner covers",
+    aliases: ["dinnercovers", "dinnercov", "dinnerguests"] },
+  { key: "retailRevenue", label: "Retail revenue",
+    aliases: ["retailrevenue", "retailrev", "retailsales", "retail"] },
+  { key: "retailTxns",    label: "Retail transactions",
+    aliases: ["retailtxns", "retailtransactions", "retailtx", "retailcount"] },
+  { key: "weatherDetail.tAvgF",       label: "Weather: avg temp (°F)",
+    aliases: ["tavgf", "avgtemp", "avgtemperature", "tempavg", "temperature"] },
+  { key: "weatherDetail.tMaxF",       label: "Weather: high temp (°F)",
+    aliases: ["tmaxf", "tempmax", "high", "maxtemp", "hightemp"] },
+  { key: "weatherDetail.tMinF",       label: "Weather: low temp (°F)",
+    aliases: ["tminf", "tempmin", "low", "mintemp", "lowtemp"] },
+  { key: "weatherDetail.precipIn",    label: "Weather: precipitation (in)",
+    aliases: ["precipin", "precip", "precipitation", "rain", "rainfall"] },
+  { key: "weatherDetail.windAvgMph",  label: "Weather: avg wind (mph)",
+    aliases: ["windavgmph", "avgwind", "wind", "windmph", "windspeed"] },
+  { key: "weatherDetail.cloudAvgPct", label: "Weather: cloud cover (%)",
+    aliases: ["cloudavgpct", "cloud", "cloudpct", "cloudcover"] },
+  { key: "weatherDetail.code",        label: "Weather: WMO code",
+    aliases: ["weathercode", "wmocode", "wmo", "code"] },
+];
+
+const TARGET_BY_KEY = Object.fromEntries(IMPORT_TARGETS.map((f) => [f.key, f]));
+
+function normHeader(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const ALIAS_INDEX = (() => {
+  const m = new Map();
+  for (const f of IMPORT_TARGETS) {
+    m.set(normHeader(f.key), f.key);
+    for (const a of f.aliases) m.set(normHeader(a), f.key);
+  }
+  return m;
+})();
+
+function autoMap(header) {
+  return ALIAS_INDEX.get(normHeader(header)) || null;
+}
+
+// RFC4180-ish CSV parser: handles quoted fields, escaped quotes, CRLF, BOM.
+function parseCSV(text) {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; continue; }
+      if (c === '"') { inQuotes = false; continue; }
+      field += c;
+    } else {
+      if (c === '"' && field === "") { inQuotes = true; continue; }
+      if (c === ",") { row.push(field); field = ""; continue; }
+      if (c === "\r") continue;
+      if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
+      field += c;
+    }
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  // Drop rows that are entirely empty.
+  return rows.filter((r) => r.some((v) => String(v).trim() !== ""));
+}
+
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+function parseImportNumber(s) {
+  if (s == null) return null;
+  const t = String(s).trim().replace(/[$,\s]/g, "").replace(/%$/, "");
+  if (t === "" || t === "-") return null;
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseImportInt(s) {
+  const n = parseImportNumber(s);
+  return n == null ? null : Math.round(n);
+}
+
+function parseImportDate(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m) {
+    const yyyy = m[3].length === 2 ? (parseInt(m[3], 10) >= 70 ? "19" : "20") + m[3] : m[3];
+    return `${yyyy}-${pad2(m[1])}-${pad2(m[2])}`;
+  }
+  return null;
+}
+
+function buildImportRecord(rowObj, mapping) {
+  const rec = {};
+  let detail = null;
+  for (const [csvCol, target] of Object.entries(mapping)) {
+    if (!target) continue;
+    const raw = rowObj[csvCol];
+    if (target === "date") {
+      const d = parseImportDate(raw);
+      if (d) rec.date = d;
+    } else if (target === "weather") {
+      const n = parseImportNumber(raw);
+      if (n != null) rec.weather = n;
+    } else if (target.startsWith("weatherDetail.")) {
+      const sub = target.split(".")[1];
+      const v = sub === "code" ? parseImportInt(raw) : parseImportNumber(raw);
+      if (v != null) (detail ??= {})[sub] = v;
+    } else if (target === "lunchCovers" || target === "dinnerCovers" || target === "retailTxns") {
+      rec[target] = parseImportInt(raw) ?? 0;
+    } else {
+      rec[target] = parseImportNumber(raw) ?? 0;
+    }
+  }
+  if (detail) rec.weatherDetail = detail;
+  return rec;
+}
+
+function validateImportRecord(rec) {
+  const errs = [];
+  if (!rec.date) errs.push("missing or invalid date");
+  else if (!/^\d{4}-\d{2}-\d{2}$/.test(rec.date)) errs.push("date not YYYY-MM-DD");
+  return errs;
+}
+
+let importState = null;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+
+const importModal = document.getElementById("import-modal");
+const importColumnsBody = document.querySelector("#import-columns tbody");
+const importPreviewHead = document.querySelector("#import-preview thead");
+const importPreviewBody = document.querySelector("#import-preview tbody");
+const importPreviewNote = document.getElementById("import-preview-note");
+const importMeta = document.getElementById("import-meta");
+const importErrorsEl = document.getElementById("import-errors");
+const importSummaryEl = document.getElementById("import-summary");
+const importConfirmBtn = document.getElementById("import-confirm");
+const importOverwriteEl = document.getElementById("import-overwrite");
+
+function openImportModal() { importModal.hidden = false; renderImportModal(); }
+function closeImportModal() { importModal.hidden = true; importState = null; }
+
+importModal.querySelectorAll("[data-close]").forEach((b) =>
+  b.addEventListener("click", closeImportModal)
+);
+
 document.getElementById("import-csv").addEventListener("change", async (e) => {
   const file = e.target.files[0];
+  e.target.value = ""; // allow re-picking the same file
   if (!file) return;
-  const text = await file.text();
-  const [headerLine, ...lines] = text.trim().split(/\r?\n/);
-  const cols = headerLine.split(",");
-  const rows = lines
-    .filter(Boolean)
-    .map((line) => {
-      const v = line.split(",");
-      const obj = {};
-      cols.forEach((c, i) => (obj[c] = v[i]));
-      return {
-        date: obj.date,
-        weather: parseFloat(obj.weather),
-        lunchRevenue: parseFloat(obj.lunchRevenue) || 0,
-        lunchCovers: parseInt(obj.lunchCovers) || 0,
-        dinnerRevenue: parseFloat(obj.dinnerRevenue) || 0,
-        dinnerCovers: parseInt(obj.dinnerCovers) || 0,
-        retailRevenue: parseFloat(obj.retailRevenue) || 0,
-        retailTxns: parseInt(obj.retailTxns) || 0,
-        weatherDetail: {
-          tAvgF: parseFloat(obj.tAvgF) || null,
-          tMaxF: parseFloat(obj.tMaxF) || null,
-          tMinF: parseFloat(obj.tMinF) || null,
-          precipIn: parseFloat(obj.precipIn) || 0,
-          // Accept new (avg) and legacy (max) column names on import.
-          windAvgMph: parseFloat(obj.windAvgMph ?? obj.windMph) || 0,
-          cloudAvgPct: parseFloat(obj.cloudAvgPct ?? obj.cloudPct) || null,
-          code: parseInt(obj.weatherCode) || null,
-        },
-      };
-    });
+  let text;
   try {
-    await bulkImport(rows);
-    renderRecords();
-    alert(`Imported ${rows.length} records.`);
+    text = await file.text();
   } catch (err) {
+    alert(`Could not read file: ${err.message}`);
+    return;
+  }
+  const rows = parseCSV(text);
+  if (rows.length < 2) {
+    alert("CSV is empty or has only a header row.");
+    return;
+  }
+  const headers = rows[0].map((h) => String(h).trim());
+  const dataRows = rows.slice(1);
+
+  const mapping = {};
+  const include = {};
+  for (const h of headers) {
+    const auto = autoMap(h);
+    mapping[h] = auto;
+    include[h] = !!auto;
+  }
+  importState = { filename: file.name, headers, dataRows, mapping, include };
+  openImportModal();
+});
+
+function effectiveMapping() {
+  const m = {};
+  for (const h of importState.headers) {
+    if (importState.include[h] && importState.mapping[h]) m[h] = importState.mapping[h];
+  }
+  return m;
+}
+
+function renderImportModal() {
+  const s = importState;
+  importMeta.textContent = `${s.filename} — ${s.dataRows.length} data rows, ${s.headers.length} columns`;
+
+  importColumnsBody.innerHTML = "";
+  s.headers.forEach((h, idx) => {
+    const sample = (s.dataRows.find((r) => String(r[idx] ?? "").trim() !== "") || [])[idx] ?? "";
+    const opts = [
+      `<option value="">(skip)</option>`,
+      ...IMPORT_TARGETS.map(
+        (f) =>
+          `<option value="${f.key}"${s.mapping[h] === f.key ? " selected" : ""}>${escapeHtml(
+            f.label
+          )}${f.required ? " *" : ""}</option>`
+      ),
+    ].join("");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="narrow"><input type="checkbox" data-idx="${idx}"${s.include[h] ? " checked" : ""} aria-label="Include ${escapeHtml(h)}"></td>
+      <td><code>${escapeHtml(h)}</code></td>
+      <td><select data-idx="${idx}">${opts}</select></td>
+      <td class="muted">${escapeHtml(String(sample).slice(0, 60))}</td>
+    `;
+    importColumnsBody.appendChild(tr);
+  });
+
+  importColumnsBody.querySelectorAll('input[type="checkbox"]').forEach((cb) =>
+    cb.addEventListener("change", () => {
+      const h = s.headers[parseInt(cb.dataset.idx, 10)];
+      s.include[h] = cb.checked;
+      renderImportPreview();
+    })
+  );
+  importColumnsBody.querySelectorAll("select").forEach((sel) =>
+    sel.addEventListener("change", () => {
+      const idx = parseInt(sel.dataset.idx, 10);
+      const h = s.headers[idx];
+      s.mapping[h] = sel.value || null;
+      // Auto-toggle the include checkbox when a mapping is chosen or cleared.
+      const cb = importColumnsBody.querySelector(`input[type="checkbox"][data-idx="${idx}"]`);
+      cb.checked = !!sel.value;
+      s.include[h] = !!sel.value;
+      renderImportPreview();
+    })
+  );
+
+  renderImportPreview();
+}
+
+function renderImportPreview() {
+  const s = importState;
+  const m = effectiveMapping();
+  const targetKeys = [...new Set(Object.values(m))];
+
+  if (!targetKeys.length || !targetKeys.includes("date")) {
+    importPreviewHead.innerHTML = "";
+    importPreviewBody.innerHTML = `<tr><td class="muted">${
+      targetKeys.length ? "Map a column to <strong>Date</strong> to preview." : "No columns selected."
+    }</td></tr>`;
+    importPreviewNote.textContent = "";
+    importErrorsEl.textContent = "";
+    importSummaryEl.textContent = "";
+    importConfirmBtn.disabled = true;
+    s.records = [];
+    s.validRecords = [];
+    return;
+  }
+
+  importPreviewHead.innerHTML =
+    "<tr>" +
+    targetKeys.map((k) => `<th>${escapeHtml(TARGET_BY_KEY[k]?.label || k)}</th>`).join("") +
+    "</tr>";
+
+  const records = [];
+  const errors = [];
+  for (let i = 0; i < s.dataRows.length; i++) {
+    const arr = s.dataRows[i];
+    const obj = {};
+    s.headers.forEach((h, j) => (obj[h] = arr[j]));
+    const rec = buildImportRecord(obj, m);
+    const errs = validateImportRecord(rec);
+    records.push({ rec, errs, lineNo: i + 2 });
+    if (errs.length) errors.push(`Line ${i + 2}: ${errs.join(", ")}`);
+  }
+
+  const validRecords = records.filter((r) => !r.errs.length).map((r) => r.rec);
+  // Dedupe by date so a single import can't overwrite itself row-by-row.
+  const dedup = new Map();
+  for (const r of validRecords) dedup.set(r.date, r);
+  s.validRecords = [...dedup.values()];
+  s.records = records;
+
+  const previewRows = records.slice(0, 10);
+  importPreviewNote.textContent = `(showing first ${previewRows.length} of ${records.length})`;
+  importPreviewBody.innerHTML = previewRows
+    .map(({ rec, errs }) => {
+      const cells = targetKeys
+        .map((k) => {
+          let v;
+          if (k.startsWith("weatherDetail.")) v = rec.weatherDetail?.[k.split(".")[1]];
+          else v = rec[k];
+          return `<td>${v == null || v === "" ? '<span class="muted">—</span>' : escapeHtml(String(v))}</td>`;
+        })
+        .join("");
+      return `<tr style="${errs.length ? "background:#fef2f2" : ""}">${cells}</tr>`;
+    })
+    .join("");
+
+  const errCount = records.length - s.validRecords.length;
+  importSummaryEl.innerHTML = `<strong>${s.validRecords.length}</strong> ready to import${
+    errCount ? ` &middot; <span style="color:var(--bad)">${errCount} skipped</span>` : ""
+  }`;
+  importErrorsEl.textContent = errors.slice(0, 6).join("\n") + (errors.length > 6 ? `\n…and ${errors.length - 6} more` : "");
+  importConfirmBtn.disabled = !s.validRecords.length;
+}
+
+importConfirmBtn.addEventListener("click", async () => {
+  const s = importState;
+  let toImport = s.validRecords;
+  if (!importOverwriteEl.checked) {
+    const existing = new Set(RECORDS.map((r) => r.date));
+    toImport = toImport.filter((r) => !existing.has(r.date));
+  }
+  if (!toImport.length) {
+    alert("Nothing to import — all rows would be skipped.");
+    return;
+  }
+  importConfirmBtn.disabled = true;
+  try {
+    await bulkImport(toImport);
+    closeImportModal();
+    renderRecords();
+    renderMetrics();
+    alert(`Imported ${toImport.length} records.`);
+  } catch (err) {
+    importConfirmBtn.disabled = false;
     alert(`Import failed: ${err.message}`);
   }
-  e.target.value = "";
 });
 
 // --------------------- metrics view ---------------------

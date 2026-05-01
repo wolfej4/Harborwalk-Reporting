@@ -224,6 +224,61 @@
       </section>
     </main>
 
+    <!-- CSV import preview modal -->
+    <div id="import-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <div class="modal-head">
+          <h2 id="import-title">Verify CSV import</h2>
+          <button class="ghost" data-close>Cancel</button>
+        </div>
+        <div class="modal-body">
+          <p id="import-meta" class="muted"></p>
+
+          <h3>Columns</h3>
+          <p class="muted">
+            Uncheck a column to skip it, or remap it to a different field. Date
+            is required for a row to be imported.
+          </p>
+          <div class="table-wrap">
+            <table id="import-columns">
+              <thead>
+                <tr>
+                  <th class="narrow">Include</th>
+                  <th>CSV column</th>
+                  <th>Maps to</th>
+                  <th>Sample</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <h3>Preview <span class="muted" id="import-preview-note"></span></h3>
+          <div class="table-wrap">
+            <table id="import-preview">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div id="import-errors" class="muted"></div>
+
+          <label class="inline" style="margin-top: 12px">
+            <input type="checkbox" id="import-overwrite" checked />
+            <span>Overwrite existing records with the same date</span>
+          </label>
+        </div>
+        <div class="modal-foot">
+          <span id="import-summary" class="muted"></span>
+          <div class="card-actions">
+            <button class="ghost" data-close>Cancel</button>
+            <button class="primary" id="import-confirm" disabled>Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
