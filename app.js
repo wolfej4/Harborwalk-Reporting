@@ -514,9 +514,24 @@ function autoMap(header) {
   return ALIAS_INDEX.get(normHeader(header)) || null;
 }
 
+// Auto-detect comma vs tab vs semicolon by counting separators in the first
+// non-quoted line. Excel exports often use \t or ; depending on the locale.
+function detectDelimiter(text) {
+  const sample = text.slice(0, 4096).split(/\r?\n/).filter(Boolean)[0] || "";
+  const counts = { ",": 0, "\t": 0, ";": 0 };
+  let inQuotes = false;
+  for (const c of sample) {
+    if (c === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && c in counts) counts[c]++;
+  }
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0] || ",";
+}
+
 // RFC4180-ish CSV parser: handles quoted fields, escaped quotes, CRLF, BOM.
+// Delimiter is auto-detected (comma, tab, or semicolon).
 function parseCSV(text) {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const delim = detectDelimiter(text);
   const rows = [];
   let row = [];
   let field = "";
@@ -529,7 +544,7 @@ function parseCSV(text) {
       field += c;
     } else {
       if (c === '"' && field === "") { inQuotes = true; continue; }
-      if (c === ",") { row.push(field); field = ""; continue; }
+      if (c === delim) { row.push(field); field = ""; continue; }
       if (c === "\r") continue;
       if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
       field += c;
@@ -628,33 +643,43 @@ importModal.querySelectorAll("[data-close]").forEach((b) =>
 );
 
 document.getElementById("import-csv").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  e.target.value = ""; // allow re-picking the same file
+  const input = e.target;
+  const file = input.files && input.files[0];
   if (!file) return;
-  let text;
   try {
-    text = await file.text();
+    const text = await file.text();
+    const rows = parseCSV(text);
+    if (rows.length < 2) {
+      alert("CSV looks empty or has only a header row.");
+      return;
+    }
+    const headers = rows[0].map((h) => String(h).trim());
+    const dataRows = rows.slice(1);
+    const mapping = {};
+    const include = {};
+    for (const h of headers) {
+      const auto = autoMap(h);
+      mapping[h] = auto;
+      include[h] = !!auto;
+    }
+    importState = { filename: file.name, headers, dataRows, mapping, include };
+    openImportModal();
   } catch (err) {
-    alert(`Could not read file: ${err.message}`);
-    return;
+    console.error(err);
+    alert(`Could not read CSV: ${err.message}`);
+  } finally {
+    // Clear AFTER reading so re-picking the same file still triggers change.
+    input.value = "";
   }
-  const rows = parseCSV(text);
-  if (rows.length < 2) {
-    alert("CSV is empty or has only a header row.");
-    return;
-  }
-  const headers = rows[0].map((h) => String(h).trim());
-  const dataRows = rows.slice(1);
+});
 
-  const mapping = {};
-  const include = {};
-  for (const h of headers) {
-    const auto = autoMap(h);
-    mapping[h] = auto;
-    include[h] = !!auto;
-  }
-  importState = { filename: file.name, headers, dataRows, mapping, include };
-  openImportModal();
+// Catch anything that escapes the handlers and show it to the user instead of
+// failing silently in the console — makes "doesn't work" reports diagnosable.
+window.addEventListener("error", (ev) => {
+  showBanner(`Script error: ${ev.message || ev.error?.message || "unknown"}`);
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  showBanner(`Unhandled error: ${ev.reason?.message || ev.reason || "unknown"}`);
 });
 
 function effectiveMapping() {
