@@ -373,6 +373,123 @@ tbody tr:hover {
   padding-top: 12px;
 }
 
+.modal[hidden] {
+  display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.modal-card {
+  position: relative;
+  background: white;
+  border-radius: 12px;
+  width: 980px;
+  max-width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal-head,
+.modal-foot {
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-head {
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-foot {
+  border-top: 1px solid var(--border);
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-body h3 {
+  margin: 18px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.modal-body h3:first-child {
+  margin-top: 0;
+}
+
+#import-columns th.narrow,
+#import-columns td.narrow {
+  width: 70px;
+  text-align: center;
+}
+
+#import-columns select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  font: inherit;
+}
+
+#import-columns code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+#import-preview thead th {
+  font-size: 10px;
+}
+
+#import-errors {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--bad);
+  white-space: pre-wrap;
+}
+
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+label.inline > span {
+  font-weight: 400;
+}
+
 @media (max-width: 600px) {
   .grid,
   .period-grid,
