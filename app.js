@@ -9,19 +9,23 @@ const DEFAULT_SETTINGS = {
   tz: "America/Chicago",
 };
 
-// "Today" in the configured timezone, formatted YYYY-MM-DD. Using en-CA gives
-// us ISO-style output without parsing localized strings. Falls back to UTC if
-// the runtime can't honor the timezone.
+// "Today" in the configured timezone, formatted YYYY-MM-DD. Treats "auto",
+// empty, or invalid IANA names as the browser's local timezone — never UTC,
+// since picking UTC would re-introduce the after-close-shows-tomorrow bug.
 function todayInTz(tz) {
+  const wanted = tz && tz !== "auto" ? tz : undefined;
+  const tryFormat = (timeZone) => {
+    const opts = { year: "numeric", month: "2-digit", day: "2-digit" };
+    if (timeZone) opts.timeZone = timeZone;
+    const parts = new Intl.DateTimeFormat("en-CA", opts).formatToParts(new Date());
+    const get = (t) => parts.find((p) => p.type === t)?.value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  };
   try {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz || "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date());
+    return tryFormat(wanted);
   } catch {
-    return new Date().toISOString().slice(0, 10);
+    // Fall back to the browser's local zone — Intl with no timeZone uses it.
+    return tryFormat(undefined);
   }
 }
 
@@ -52,6 +56,14 @@ async function api(path, opts = {}) {
 async function bootstrap() {
   try {
     [RECORDS, SETTINGS] = await Promise.all([api("/api/records"), api("/api/settings")]);
+    // Self-heal a legacy tz of "auto" (which Intl can't honor and would
+    // silently fall back to UTC, flipping "today" forward after close).
+    if (!SETTINGS.tz || SETTINGS.tz === "auto") {
+      SETTINGS = await api("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...SETTINGS, tz: DEFAULT_SETTINGS.tz }),
+      });
+    }
   } catch (e) {
     showBanner(`Could not reach the server: ${e.message}`);
   }
@@ -748,7 +760,7 @@ settingsForm.addEventListener("submit", async (e) => {
       label: document.getElementById("s-label").value || DEFAULT_SETTINGS.label,
       lat: parseFloat(document.getElementById("s-lat").value) || DEFAULT_SETTINGS.lat,
       lon: parseFloat(document.getElementById("s-lon").value) || DEFAULT_SETTINGS.lon,
-      tz: document.getElementById("s-tz").value || "auto",
+      tz: document.getElementById("s-tz").value.trim() || DEFAULT_SETTINGS.tz,
     });
     msg.textContent = "Saved.";
     msg.className = "msg ok";

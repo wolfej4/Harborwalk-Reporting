@@ -140,7 +140,16 @@ app.put("/api/settings", async (req, res, next) => {
   }
 });
 
-app.use(express.static(PUBLIC_DIR, { extensions: ["html"] }));
+app.use(
+  express.static(PUBLIC_DIR, {
+    extensions: ["html"],
+    // Always revalidate so a redeploy is picked up on next page load —
+    // the assets are tiny and there's no fingerprinting in filenames yet.
+    setHeaders(res) {
+      res.setHeader("Cache-Control", "no-cache");
+    },
+  })
+);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
