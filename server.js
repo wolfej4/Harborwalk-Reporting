@@ -143,10 +143,12 @@ app.put("/api/settings", async (req, res, next) => {
 app.use(
   express.static(PUBLIC_DIR, {
     extensions: ["html"],
-    // Always revalidate so a redeploy is picked up on next page load —
-    // the assets are tiny and there's no fingerprinting in filenames yet.
+    // The static bundle is tiny and there's no fingerprinting in filenames,
+    // so disable the browser cache entirely. Prevents "import looks broken"
+    // type bugs caused by a stale app.js stuck in the browser cache after a
+    // redeploy.
     setHeaders(res) {
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-store, must-revalidate");
     },
   })
 );
